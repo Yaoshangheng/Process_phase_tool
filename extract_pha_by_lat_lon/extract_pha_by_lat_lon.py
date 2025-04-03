@@ -1,17 +1,19 @@
 #  
 # 
-# 
+# python extract_pha.py example_pal_hyp_good.txt example_pal_hyp_full.pha output.pha --mode lat-lon -remove-id
 # Yuan Yao@KMS 2025-04-03
 
 import sys
 import os
+import argparse
 
-def read_good_records(file_path, tolerance=1e-4):
+def read_good_records(file_path, mode="lat-lon", tolerance=1e-4):
     """
-    读取 example_pal_hyp_good.txt 的经纬度，并存储为 (lat, lon) 集合
-    :param tolerance: 浮点数匹配容差（默认 0.0001）
+    读取 example_pal_hyp_good.txt 的记录
+    :param mode: "lat-lon"（按经纬度）或 "time"（按时间）
+    :param tolerance: 浮点数容差
     """
-    good_records = set()
+    records = set()
     try:
         with open(file_path, 'r') as file:
             for line in file:
@@ -20,22 +22,31 @@ def read_good_records(file_path, tolerance=1e-4):
                     parts = line.split()
                     if len(parts) >= 3:
                         try:
-                            lat = float(parts[1])  # 纬度（第2列）
-                            lon = float(parts[2])  # 经度（第3列）
-                            # 标准化浮点数（避免精度问题）
-                            lat_rounded = round(lat / tolerance) * tolerance
-                            lon_rounded = round(lon / tolerance) * tolerance
-                            good_records.add((lat_rounded, lon_rounded))
+                            if mode == "lat-lon":
+                                # 按经纬度匹配
+                                lat = round(float(parts[1]) / tolerance) * tolerance
+                                lon = round(float(parts[2]) / tolerance) * tolerance
+                                records.add((lat, lon))
+                            elif mode == "time":
+                                # 按时间匹配（标准化为 XXXXXX.0）
+                                time_str = parts[0]
+                                if '.' not in time_str:
+                                    time_str += ".0"
+                                records.add(time_str)
                         except ValueError:
-                            print(f"Warning: Invalid lat/lon in line: {line}")
-        return good_records
+                            print(f"Warning: Invalid data in line: {line}")
+        return records
     except FileNotFoundError:
         print(f"Error: File {file_path} not found!")
         sys.exit(1)
 
-def extract_events_by_lat_lon(input_pha, good_records, output_pha, tolerance=1e-4):
+def extract_events(
+    input_pha, output_pha, good_records, mode="lat-lon",
+    remove_id=False, tolerance=1e-4
+):
     """
-    从 example_pal_hyp_full.pha 提取匹配经纬度的事件和震相行
+    从 example_pal_hyp_full.pha 提取匹配的事件和震相行
+    :param remove_id: 是否移除事件行末尾的编号（如 ,0）
     """
     try:
         if os.path.getsize(input_pha) == 0:
@@ -52,32 +63,40 @@ def extract_events_by_lat_lon(input_pha, good_records, output_pha, tolerance=1e-
                 if not line:
                     continue
 
-                # 检查是否是事件行（以数字开头）
+                # 事件行（以数字开头）
                 if line[0].isdigit():
                     parts = line.split(',')
                     if len(parts) >= 3:
                         try:
-                            lat = float(parts[1])  # 纬度（第2列）
-                            lon = float(parts[2])  # 经度（第3列）
-                            # 标准化浮点数
-                            lat_rounded = round(lat / tolerance) * tolerance
-                            lon_rounded = round(lon / tolerance) * tolerance
-                            # 检查是否在 good_records 中
-                            if (lat_rounded, lon_rounded) in good_records:
+                            match = False
+                            if mode == "lat-lon":
+                                # 按经纬度匹配
+                                lat = round(float(parts[1]) / tolerance) * tolerance
+                                lon = round(float(parts[2]) / tolerance) * tolerance
+                                match = (lat, lon) in good_records
+                            elif mode == "time":
+                                # 按时间匹配
+                                time_str = parts[0]
+                                if '.' in time_str:
+                                    time_str = time_str.split('.')[0] + ".0"
+                                match = time_str in good_records
+
+                            if match:
                                 current_event = line
                                 write_mode = True
+                                # 移除编号（如果启用）
+                                if remove_id and ',' in line:
+                                    line = ','.join(line.split(',')[:-1])
                                 outfile.write(line + '\n')
                                 matched_events += 1
                             else:
                                 write_mode = False
-                                current_event = None
                         except ValueError:
-                            print(f"Warning: Invalid lat/lon in line: {line}")
+                            print(f"Warning: Invalid data in line: {line}")
                             write_mode = False
-                else:
-                    # 震相行，仅在匹配的事件后写入
-                    if write_mode and current_event:
-                        outfile.write(line + '\n')
+                # 震相行（以字母开头）
+                elif write_mode:
+                    outfile.write(line + '\n')
 
             print(f"Matched {matched_events} events in {input_pha}.")
             if matched_events == 0:
@@ -88,20 +107,31 @@ def extract_events_by_lat_lon(input_pha, good_records, output_pha, tolerance=1e-
         sys.exit(1)
 
 def main():
-    if len(sys.argv) != 4:
-        print("Usage: python extract_pha_by_lat_lon.py example_pal_hyp_good.txt example_pal_hyp_full.pha example_pal_hyp_good.pha")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Extract earthquake events from example_pal_hyp_full.pha based on example_pal_hyp_good.txt."
+    )
+    parser.add_argument("good_txt", help="Path to example_pal_hyp_good.txt")
+    parser.add_argument("full_pha", help="Path to example_pal_hyp_full.pha")
+    parser.add_argument("output_pha", help="Path to output example_pal_hyp_good.pha")
+    parser.add_argument(
+        "--mode", choices=["lat-lon", "time"], default="lat-lon",
+        help="Matching mode: 'lat-lon' (default) or 'time'"
+    )
+    parser.add_argument(
+        "--remove-id", action="store_true",
+        help="Remove the trailing ID from event lines (e.g., ',0')"
+    )
+    args = parser.parse_args()
 
-    good_txt = sys.argv[1]
-    full_pha = sys.argv[2]
-    good_pha = sys.argv[3]
+    print(f"Reading records from {args.good_txt} (mode: {args.mode})...")
+    good_records = read_good_records(args.good_txt, mode=args.mode)
+    print(f"Found {len(good_records)} unique records.")
 
-    print(f"Reading lat/lon records from {good_txt}...")
-    good_records = read_good_records(good_txt)
-    print(f"Found {len(good_records)} unique (lat, lon) records.")
-
-    print(f"Extracting matching events from {full_pha} to {good_pha}...")
-    extract_events_by_lat_lon(full_pha, good_records, good_pha)
+    print(f"Extracting matching events from {args.full_pha} to {args.output_pha}...")
+    extract_events(
+        args.full_pha, args.output_pha, good_records,
+        mode=args.mode, remove_id=args.remove_id
+    )
 
 if __name__ == "__main__":
     main()
