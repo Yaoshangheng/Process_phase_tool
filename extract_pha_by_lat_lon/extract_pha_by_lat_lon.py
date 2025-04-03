@@ -1,6 +1,6 @@
 #  
-# 
 # Usage:python extract_pha_by_lat_lon.py example_pal_hyp_good.txt example_pal_hyp_full.pha output.pha --mode lat-lon -remove-id
+# -remove-id can remove pha id
 # Yuan Yao@KMS 2025-04-03
 
 import sys
